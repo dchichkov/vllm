@@ -60,6 +60,10 @@ class SpeculativeConfig:
     num_speculative_tokens: int = Field(default=None, gt=0)
     """The number of speculative tokens, if provided. It will default to the
     number in the draft model config if present, otherwise, it is required."""
+    rejection_threshold: float | None = Field(default=None, ge=0.0)
+    """Threshold for relaxed rejection sampling. If the difference between the
+    target model's top logit and the draft model's token logit is below this
+    threshold, the draft token is accepted."""
     model: str | None = None
     """The name of the draft model, eagle head, or additional weights, if
     provided."""

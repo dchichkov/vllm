@@ -401,7 +401,16 @@ class GPUModelRunner(
                     "Unknown speculative decoding method: "
                     f"{self.speculative_config.method}"
                 )
-            self.rejection_sampler = RejectionSampler(self.sampler)
+            self.rejection_sampler = RejectionSampler(
+                self.sampler,
+                rejection_threshold=self.speculative_config.rejection_threshold,
+            )
+        if self.speculative_config.rejection_threshold is not None:
+            logger.warning(
+                "Speculative decoding is using relaxed rejection_threshold=%f; "
+                "outputs will no longer match the exact target distribution.",
+                self.speculative_config.rejection_threshold,
+            )
 
         self.num_spec_tokens = 0
         if self.speculative_config:

@@ -49,9 +49,10 @@ class RejectionSampler(nn.Module):
         output tokens = accepted tokens + recovered tokens + bonus tokens
     """
 
-    def __init__(self, sampler: Sampler):
+    def __init__(self, sampler: Sampler, rejection_threshold: float | None = None):
         super().__init__()
         self.sampler = sampler
+        self.rejection_threshold = rejection_threshold
         logprobs_mode = self.sampler.logprobs_mode
         self.is_processed_logprobs_mode = logprobs_mode.startswith("processed")
         self.is_logits_logprobs_mode = logprobs_mode.endswith("logits")
@@ -142,6 +143,8 @@ class RejectionSampler(nn.Module):
             target_probs,
             bonus_token_ids,
             sampling_metadata,
+            target_logits,
+            self.rejection_threshold,
         )
 
         logprobs_tensors = None
@@ -340,11 +343,16 @@ def rejection_sample(
     # [batch_size, 1]
     bonus_token_ids: torch.Tensor,
     sampling_metadata: SamplingMetadata,
+    target_logits: torch.Tensor | None = None,
+    rejection_threshold: float | None = None,
 ) -> torch.Tensor:
     assert draft_token_ids.ndim == 1
     assert draft_probs is None or draft_probs.ndim == 2
     assert cu_num_draft_tokens.ndim == 1
     assert target_probs.ndim == 2
+    if rejection_threshold is not None:
+        assert target_logits is not None
+        assert target_logits.ndim == 2
 
     batch_size = len(num_draft_tokens)
     num_tokens = draft_token_ids.shape[0]
@@ -379,6 +387,9 @@ def rejection_sample(
             bonus_token_ids,
             is_greedy,
             max_spec_len,
+            target_logits,
+            rejection_threshold if rejection_threshold is not None else -1.0,
+            target_logits.shape[-1] if target_logits is not None else 0,
         )
         if sampling_metadata.all_greedy:
             return output_token_ids
@@ -630,6 +641,9 @@ def rejection_greedy_sample_kernel(
     bonus_token_ids_ptr,  # [batch_size]
     is_greedy_ptr,  # [batch_size] or None
     max_spec_len,
+    target_logits_ptr,  # [num_tokens, vocab_size] or None
+    rejection_threshold,  # float
+    vocab_size,  # int
 ):
     req_idx = tl.program_id(0)
     # FIXME(woosuk): Because is_greedy_ptr is not None at profiling run,
@@ -648,12 +662,31 @@ def rejection_greedy_sample_kernel(
         if not rejected:
             draft_token_id = tl.load(draft_token_ids_ptr + start_idx + pos)
             target_argmax_id = tl.load(target_argmax_ptr + start_idx + pos)
-            tl.store(
-                output_token_ids_ptr + req_idx * (max_spec_len + 1) + pos,
-                target_argmax_id,
-            )
-            if draft_token_id != target_argmax_id:
-                # Reject.
+
+            accepted = False
+            if draft_token_id == target_argmax_id:
+                accepted = True
+            elif rejection_threshold >= 0.0:
+                offset = (start_idx + pos) * vocab_size
+                target_top_logit = tl.load(
+                    target_logits_ptr + offset + target_argmax_id
+                )
+                draft_token_logit = tl.load(
+                    target_logits_ptr + offset + draft_token_id
+                )
+                if target_top_logit - draft_token_logit < rejection_threshold:
+                    accepted = True
+
+            if accepted:
+                tl.store(
+                    output_token_ids_ptr + req_idx * (max_spec_len + 1) + pos,
+                    draft_token_id,
+                )
+            else:
+                tl.store(
+                    output_token_ids_ptr + req_idx * (max_spec_len + 1) + pos,
+                    target_argmax_id,
+                )
                 rejected = True
 
     if not rejected:
