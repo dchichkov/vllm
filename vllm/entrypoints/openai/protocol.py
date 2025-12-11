@@ -687,6 +687,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
             "need to map generated text back to input tokens."
         ),
     )
+
     cache_salt: str | None = Field(
         default=None,
         description=(
@@ -698,20 +699,30 @@ class ChatCompletionRequest(OpenAIBaseModel):
             "to 256 bit)."
         ),
     )
+
     kv_transfer_params: dict[str, Any] | None = Field(
         default=None,
         description="KVTransfer parameters used for disaggregated serving.",
     )
 
-    vllm_xargs: dict[str, str | int | float | list[str | int | float]] | None = Field(
+    vllm_xargs: dict[str, str | int | float] | None = Field(
         default=None,
         description=(
-            "Additional request parameters with (list of) string or "
+            "Additional request parameters with string or "
             "numeric values, used by custom extensions."
         ),
     )
 
-    # --8<-- [end:chat-completion-extra-params]
+    rejection_threshold: float | None = Field(
+        default=None,
+        description=(
+            "Threshold for relaxed rejection sampling. If the difference between the "
+            "target model's top logit and the draft model's token logit is below this "
+            "threshold, the draft token is accepted. Only used when speculative decoding "
+            "is enabled."
+        ),
+    )
+    # --8<-- [end:completion-extra-params]
 
     # Default sampling parameters for chat completion requests
     _DEFAULT_SAMPLING_PARAMS: dict = {
@@ -768,6 +779,11 @@ class ChatCompletionRequest(OpenAIBaseModel):
             min_p = default_sampling_params.get(
                 "min_p", self._DEFAULT_SAMPLING_PARAMS["min_p"]
             )
+        if (rejection_threshold := self.rejection_threshold) is None:
+            rejection_threshold = default_sampling_params.get(
+                "rejection_threshold",
+                self._DEFAULT_SAMPLING_PARAMS.get("rejection_threshold"),
+            )
 
         prompt_logprobs = self.prompt_logprobs
         if prompt_logprobs is None and self.echo:
@@ -812,6 +828,7 @@ class ChatCompletionRequest(OpenAIBaseModel):
             top_p=top_p,
             top_k=top_k,
             min_p=min_p,
+            rejection_threshold=rejection_threshold,
             seed=self.seed,
             stop=self.stop,
             stop_token_ids=self.stop_token_ids,
@@ -1131,6 +1148,15 @@ class CompletionRequest(OpenAIBaseModel):
         ),
     )
 
+    rejection_threshold: float | None = Field(
+        default=None,
+        description=(
+            "Threshold for relaxed rejection sampling. If the difference between the "
+            "target model's top logit and the draft model's token logit is below this "
+            "threshold, the draft token is accepted. Only used when speculative decoding "
+            "is enabled."
+        ),
+    )
     # --8<-- [end:completion-extra-params]
 
     # Default sampling parameters for completion requests
@@ -1194,6 +1220,11 @@ class CompletionRequest(OpenAIBaseModel):
             min_p = default_sampling_params.get(
                 "min_p", self._DEFAULT_SAMPLING_PARAMS["min_p"]
             )
+        if (rejection_threshold := self.rejection_threshold) is None:
+            rejection_threshold = default_sampling_params.get(
+                "rejection_threshold",
+                self._DEFAULT_SAMPLING_PARAMS.get("rejection_threshold"),
+            )
 
         prompt_logprobs = self.prompt_logprobs
         if prompt_logprobs is None and self.echo:
@@ -1240,6 +1271,7 @@ class CompletionRequest(OpenAIBaseModel):
             top_p=top_p,
             top_k=top_k,
             min_p=min_p,
+            rejection_threshold=rejection_threshold,
             seed=self.seed,
             stop=self.stop,
             stop_token_ids=self.stop_token_ids,
@@ -2016,7 +2048,7 @@ class TranscriptionRequest(OpenAIBaseModel):
     """The sampling temperature, between 0 and 1.
 
     Higher values like 0.8 will make the output more random, while lower values
-    like 0.2 will make it more focused / deterministic. If set to 0, the model
+    like 0.2 will make it more focused / deterministic. If set to  0, the model
     will use [log probability](https://en.wikipedia.org/wiki/Log_probability)
     to automatically increase the temperature until certain thresholds are hit.
     """

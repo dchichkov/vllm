@@ -96,9 +96,15 @@ class InputBatch:
         is_pooling_model: bool = False,
         num_speculative_tokens: int = 0,
         cp_kv_cache_interleave_size: int = 1,
+        default_rejection_threshold: float | None = None,
     ):
         self.is_pooling_model = is_pooling_model
         self.is_spec_decode = is_spec_decode
+        self.default_rejection_threshold = (
+            default_rejection_threshold
+            if default_rejection_threshold is not None
+            else -1.0
+        )
         self.max_num_reqs = max_num_reqs
         self.max_model_len = max_model_len
         self.max_num_batched_tokens = max_num_batched_tokens
@@ -176,6 +182,14 @@ class InputBatch:
         )
         self.top_k_cpu = self.top_k_cpu_tensor.numpy()
         self.top_k_reqs: set[str] = set()
+
+        self.rejection_threshold = torch.empty(
+            (max_num_reqs,), dtype=torch.float32, device=device
+        )
+        self.rejection_threshold_cpu_tensor = torch.empty(
+            (max_num_reqs,), dtype=torch.float32, device="cpu", pin_memory=pin_memory
+        )
+        self.rejection_threshold_cpu = self.rejection_threshold_cpu_tensor.numpy()
 
         # IDs of requests which do not support spec decoding
         self.spec_decode_unsupported_reqs: set[str] = set()
@@ -369,6 +383,11 @@ class InputBatch:
             else:
                 top_k = self.vocab_size
             self.top_k_cpu[req_index] = top_k
+            self.rejection_threshold_cpu[req_index] = (
+                sampling_params.rejection_threshold
+                if sampling_params.rejection_threshold is not None
+                else self.default_rejection_threshold
+            )
             self.frequency_penalties_cpu[req_index] = sampling_params.frequency_penalty
             if sampling_params.frequency_penalty != 0.0:
                 self.frequency_penalties_reqs.add(req_id)
@@ -583,6 +602,10 @@ class InputBatch:
         )
         self.top_p_cpu[i1], self.top_p_cpu[i2] = self.top_p_cpu[i2], self.top_p_cpu[i1]
         self.top_k_cpu[i1], self.top_k_cpu[i2] = self.top_k_cpu[i2], self.top_k_cpu[i1]
+        self.rejection_threshold_cpu[i1], self.rejection_threshold_cpu[i2] = (
+            self.rejection_threshold_cpu[i2],
+            self.rejection_threshold_cpu[i1],
+        )
         self.frequency_penalties_cpu[i1], self.frequency_penalties_cpu[i2] = (
             self.frequency_penalties_cpu[i2],
             self.frequency_penalties_cpu[i1],
@@ -710,6 +733,9 @@ class InputBatch:
             self.temperature_cpu[empty_index] = self.temperature_cpu[last_req_index]
             self.top_p_cpu[empty_index] = self.top_p_cpu[last_req_index]
             self.top_k_cpu[empty_index] = self.top_k_cpu[last_req_index]
+            self.rejection_threshold_cpu[empty_index] = self.rejection_threshold_cpu[
+                last_req_index
+            ]
             self.frequency_penalties_cpu[empty_index] = self.frequency_penalties_cpu[
                 last_req_index
             ]
@@ -774,6 +800,10 @@ class InputBatch:
             copy_slice(self.top_p_cpu_tensor, self.top_p, num_reqs)
         if not self.no_top_k:
             copy_slice(self.top_k_cpu_tensor, self.top_k, num_reqs)
+
+        rejection_threshold = copy_slice(
+            self.rejection_threshold_cpu_tensor, self.rejection_threshold, num_reqs
+        )
 
         if not self.no_penalties:
             # Since syncing these tensors is expensive only copy them
@@ -844,6 +874,7 @@ class InputBatch:
             allowed_token_ids_mask=allowed_token_ids_mask,
             bad_words_token_ids=self.bad_words_token_ids,
             logitsprocs=self.logitsprocs,
+            rejection_threshold=rejection_threshold,
         )
 
     def get_pooling_params(self) -> list[PoolingParams]:

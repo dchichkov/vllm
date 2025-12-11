@@ -144,7 +144,7 @@ class RejectionSampler(nn.Module):
             bonus_token_ids,
             sampling_metadata,
             target_logits,
-            self.rejection_threshold,
+            sampling_metadata.rejection_threshold,
         )
 
         logprobs_tensors = None
@@ -344,7 +344,7 @@ def rejection_sample(
     bonus_token_ids: torch.Tensor,
     sampling_metadata: SamplingMetadata,
     target_logits: torch.Tensor | None = None,
-    rejection_threshold: float | None = None,
+    rejection_threshold: torch.Tensor | None = None,
 ) -> torch.Tensor:
     assert draft_token_ids.ndim == 1
     assert draft_probs is None or draft_probs.ndim == 2
@@ -353,6 +353,7 @@ def rejection_sample(
     if rejection_threshold is not None:
         assert target_logits is not None
         assert target_logits.ndim == 2
+        assert rejection_threshold.ndim == 1
 
     batch_size = len(num_draft_tokens)
     num_tokens = draft_token_ids.shape[0]
@@ -388,7 +389,7 @@ def rejection_sample(
             is_greedy,
             max_spec_len,
             target_logits,
-            rejection_threshold if rejection_threshold is not None else -1.0,
+            rejection_threshold,
             target_logits.shape[-1] if target_logits is not None else 0,
         )
         if sampling_metadata.all_greedy:
@@ -642,7 +643,7 @@ def rejection_greedy_sample_kernel(
     is_greedy_ptr,  # [batch_size] or None
     max_spec_len,
     target_logits_ptr,  # [num_tokens, vocab_size] or None
-    rejection_threshold,  # float
+    rejection_threshold_ptr,  # [batch_size] or None
     vocab_size,  # int
 ):
     req_idx = tl.program_id(0)
@@ -652,6 +653,10 @@ def rejection_greedy_sample_kernel(
     if not is_greedy:
         # Early exit for non-greedy sampling requests.
         return
+
+    rejection_threshold = -1.0
+    if rejection_threshold_ptr is not None:
+        rejection_threshold = tl.load(rejection_threshold_ptr + req_idx)
 
     start_idx = 0 if req_idx == 0 else tl.load(cu_num_draft_tokens_ptr + req_idx - 1)
     end_idx = tl.load(cu_num_draft_tokens_ptr + req_idx)

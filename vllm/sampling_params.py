@@ -211,6 +211,11 @@ class SamplingParams(
     set to an integer k, will use only the last k tokens from the prompt
     (i.e., left truncation). If set to `None`, truncation is disabled."""
     output_kind: RequestOutputKind = RequestOutputKind.CUMULATIVE
+    rejection_threshold: float | None = None
+    """Threshold for relaxed rejection sampling. If the difference between the
+    target model's top logit and the draft model's token logit is below this
+    threshold, the draft token is accepted. Only used when speculative decoding
+    is enabled."""
 
     # The below fields are not supposed to be used as an input.
     # They are set in post_init.
@@ -250,6 +255,7 @@ class SamplingParams(
         top_p: float | None = 1.0,
         top_k: int = 0,
         min_p: float = 0.0,
+        rejection_threshold: float | None = None,
         seed: int | None = None,
         stop: str | list[str] | None = None,
         stop_token_ids: list[int] | None = None,
@@ -290,6 +296,7 @@ class SamplingParams(
             top_p=1.0 if top_p is None else top_p,
             top_k=top_k,
             min_p=min_p,
+            rejection_threshold=rejection_threshold,
             seed=seed,
             stop=stop,
             stop_token_ids=stop_token_ids,
@@ -388,6 +395,12 @@ class SamplingParams(
             raise ValueError(
                 f"temperature must be non-negative, got {self.temperature}."
             )
+        if self.rejection_threshold is not None and self.rejection_threshold < 0.0:
+            raise ValueError(
+                f"rejection_threshold must be non-negative, got "
+                f"{self.rejection_threshold}."
+            )
+        
         if not 0.0 < self.top_p <= 1.0:
             raise ValueError(f"top_p must be in (0, 1], got {self.top_p}.")
         # quietly accept -1 as disabled, but prefer 0

@@ -460,6 +460,9 @@ class GPUModelRunner(
             logitsprocs_need_output_token_ids=bool(custom_logitsprocs),
             is_pooling_model=self.is_pooling_model,
             cp_kv_cache_interleave_size=self.parallel_config.cp_kv_cache_interleave_size,
+            default_rejection_threshold=self.speculative_config.rejection_threshold
+            if self.speculative_config
+            else None,
         )
 
         self.use_async_scheduling = self.scheduler_config.async_scheduling
@@ -5034,6 +5037,9 @@ class GPUModelRunner(
                 logitsprocs_need_output_token_ids=self.input_batch.logitsprocs_need_output_token_ids,
                 is_pooling_model=self.is_pooling_model,
                 num_speculative_tokens=self.num_spec_tokens,
+                default_rejection_threshold=self.speculative_config.rejection_threshold
+                if self.speculative_config
+                else None,
             )
 
     def _allocate_kv_cache_tensors(
