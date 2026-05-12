@@ -374,6 +374,14 @@ class Gemma4ToolParser(ToolParser):
         self.current_tool_name_sent = False
         self.prev_tool_call_arr: list[dict] = []
         self.streamed_args_for_tool: list[str] = []
+        # Persist the id minted on the first chunk of each tool call so
+        # subsequent argument-delta and end-flush chunks can re-emit it.
+        # The OpenAI streaming spec only requires `id` on the first chunk,
+        # but some strict client validators (e.g. Vercel AI SDK's
+        # `@ai-sdk/openai-compatible`, used by opencode) reject DeltaToolCall
+        # entries whose `id` is null/missing.  See _handle_tool_call_middle,
+        # _handle_tool_call_end and _emit_argument_diff below.
+        self.tool_call_ids: list[str] = []
 
     def adjust_request(
         self, request: ChatCompletionRequest | ResponsesRequest
@@ -620,12 +628,19 @@ class Gemma4ToolParser(ToolParser):
                 "name": func_name,
                 "arguments": {},
             }
+            # Stash the id we mint here so that subsequent arg-diff /
+            # end-flush chunks for this tool call can re-emit the same id
+            # (see _current_tool_call_id and _reset_streaming_state).
+            tool_call_id = make_tool_call_id()
+            while len(self.tool_call_ids) <= self.current_tool_id:
+                self.tool_call_ids.append("")
+            self.tool_call_ids[self.current_tool_id] = tool_call_id
             return DeltaMessage(
                 tool_calls=[
                     DeltaToolCall(
                         index=self.current_tool_id,
                         type="function",
-                        id=make_tool_call_id(),
+                        id=tool_call_id,
                         function=DeltaFunctionCall(
                             name=func_name,
                             arguments="",
@@ -672,6 +687,10 @@ class Gemma4ToolParser(ToolParser):
                     tool_calls=[
                         DeltaToolCall(
                             index=self.current_tool_id,
+                            # Re-emit id on the end-flush chunk so strict
+                            # client parsers (e.g. @ai-sdk Zod schemas) accept
+                            # this DeltaToolCall.
+                            id=self._current_tool_call_id(),
                             function=DeltaFunctionCall(arguments=diff).model_dump(
                                 exclude_none=True
                             ),
@@ -680,6 +699,16 @@ class Gemma4ToolParser(ToolParser):
                 )
 
         return None
+
+    def _current_tool_call_id(self) -> str:
+        """Return the id minted for the active tool call, or an empty str.
+
+        Used by ``_emit_argument_diff`` and ``_handle_tool_call_end`` to
+        re-emit the first-chunk id on subsequent ``DeltaToolCall`` chunks.
+        """
+        if 0 <= self.current_tool_id < len(self.tool_call_ids):
+            return self.tool_call_ids[self.current_tool_id]
+        return ""
 
     def _emit_argument_diff(self, raw_args_str: str) -> DeltaMessage | None:
         """Parse raw Gemma4 arguments, convert to JSON, diff, and emit.
@@ -768,6 +797,10 @@ class Gemma4ToolParser(ToolParser):
                 tool_calls=[
                     DeltaToolCall(
                         index=self.current_tool_id,
+                        # Re-emit id on every arg-diff chunk so strict
+                        # client parsers (e.g. @ai-sdk Zod schemas) accept
+                        # this DeltaToolCall.
+                        id=self._current_tool_call_id(),
                         function=DeltaFunctionCall(arguments=diff).model_dump(
                             exclude_none=True
                         ),
